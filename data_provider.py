@@ -27,6 +27,10 @@ def normalize_ticker(ticker: str) -> str:
     return cleaned
 
 
+def _yahoo_query_ticker(ticker: str) -> str:
+    return normalize_ticker(ticker).replace(".", "-")
+
+
 def load_weekly_data(
     ticker: str,
     data_dir: Path | str = DATA_DIR,
@@ -74,15 +78,6 @@ def _download_weekly_from_yahoo(ticker: str, include_current_week: bool = False)
         errors.append(f"Yahoo daily chart API: {exc}")
 
     try:
-        return _download_from_yahoo_chart(
-            ticker,
-            interval="1wk",
-            include_current_week=include_current_week,
-        )
-    except Exception as exc:  # pragma: no cover - depends on network.
-        errors.append(f"Yahoo weekly chart API: {exc}")
-
-    try:
         return _download_with_yfinance(ticker, include_current_week=include_current_week)
     except Exception as exc:  # pragma: no cover - depends on optional package/network.
         errors.append(f"yfinance: {exc}")
@@ -101,7 +96,7 @@ def _download_with_yfinance(ticker: str, include_current_week: bool = False) -> 
         raise DataLoadError("yfinance가 설치되어 있지 않습니다.") from exc
 
     raw = yf.download(
-        ticker,
+        _yahoo_query_ticker(ticker),
         period="max",
         interval="1d",
         auto_adjust=False,
@@ -138,7 +133,7 @@ def _download_from_yahoo_chart(
         f"?period1=0&period2={period2}"
         f"&interval={interval}&events=history&includeAdjustedClose=true"
     )
-    url = YAHOO_CHART_URL.format(ticker=quote(ticker, safe="")) + query
+    url = YAHOO_CHART_URL.format(ticker=quote(_yahoo_query_ticker(ticker), safe="")) + query
     request = Request(
         url,
         headers={

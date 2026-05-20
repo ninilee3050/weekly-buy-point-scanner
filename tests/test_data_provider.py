@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import pandas as pd
 
+import data_provider
 from data_provider import (
     _chart_payload_to_dataframe,
+    _download_weekly_from_yahoo,
     _drop_incomplete_current_week,
     _read_local_csv,
     _resample_daily_to_weekly,
+    _yahoo_query_ticker,
 )
 
 
@@ -133,3 +136,45 @@ def test_read_local_csv_can_keep_or_drop_current_week(tmp_path, monkeypatch) -> 
 
     assert dropped.index.strftime("%Y-%m-%d").tolist() == ["2026-05-11"]
     assert kept.index.strftime("%Y-%m-%d").tolist() == ["2026-05-11", "2026-05-18"]
+
+
+def test_yahoo_query_ticker_uses_yahoo_dash_for_dot_tickers() -> None:
+    assert _yahoo_query_ticker("brk.b") == "BRK-B"
+    assert _yahoo_query_ticker("BF.B") == "BF-B"
+    assert _yahoo_query_ticker("AAPL") == "AAPL"
+
+
+def test_download_weekly_from_yahoo_does_not_fall_back_to_raw_weekly(monkeypatch) -> None:
+    raw_chart_calls = []
+
+    def fake_daily_download(ticker: str, include_current_week: bool = False) -> pd.DataFrame:
+        raise RuntimeError("daily unavailable")
+
+    def fake_raw_chart(*args, **kwargs) -> pd.DataFrame:
+        raw_chart_calls.append((args, kwargs))
+        raise RuntimeError("raw 1wk fallback should not be used")
+
+    def fake_yfinance_download(ticker: str, include_current_week: bool = False) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "Open": [1.0],
+                "High": [2.0],
+                "Low": [1.0],
+                "Close": [2.0],
+                "Volume": [100],
+            },
+            index=pd.to_datetime(["2026-05-11"]),
+        )
+
+    monkeypatch.setattr(
+        data_provider,
+        "_download_daily_then_resample_from_yahoo",
+        fake_daily_download,
+    )
+    monkeypatch.setattr(data_provider, "_download_from_yahoo_chart", fake_raw_chart)
+    monkeypatch.setattr(data_provider, "_download_with_yfinance", fake_yfinance_download)
+
+    result = _download_weekly_from_yahoo("BRK.B")
+
+    assert result.index.strftime("%Y-%m-%d").tolist() == ["2026-05-11"]
+    assert raw_chart_calls == []
