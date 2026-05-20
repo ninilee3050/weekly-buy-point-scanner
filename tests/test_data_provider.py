@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import pandas as pd
 
+import data_provider
 from data_provider import (
     _chart_payload_to_dataframe,
+    _download_weekly_from_yahoo,
     _drop_incomplete_current_week,
+    _read_local_csv,
     _resample_daily_to_weekly,
+    _yahoo_query_ticker,
 )
 
 
@@ -82,3 +86,95 @@ def test_resample_daily_to_weekly_uses_monday_label_and_weekly_ohlcv() -> None:
     assert row["Low"] == 84.08
     assert row["Close"] == 87.37
     assert row["Volume"] == 150
+
+
+def test_resample_daily_to_weekly_can_keep_current_week(monkeypatch) -> None:
+    class FixedTimestamp(pd.Timestamp):
+        @classmethod
+        def today(cls, tz=None):
+            return cls("2026-05-20")
+
+    monkeypatch.setattr(pd, "Timestamp", FixedTimestamp)
+    daily = pd.DataFrame(
+        {
+            "Open": [10.0, 11.0],
+            "High": [12.0, 13.0],
+            "Low": [9.0, 10.0],
+            "Close": [11.0, 12.0],
+            "Volume": [100, 200],
+        },
+        index=pd.to_datetime(["2026-05-18", "2026-05-19"]),
+    )
+
+    result = _resample_daily_to_weekly(daily, include_current_week=True)
+
+    assert result.index.strftime("%Y-%m-%d").tolist() == ["2026-05-18"]
+    assert result.iloc[0]["Close"] == 12.0
+
+
+def test_read_local_csv_can_keep_or_drop_current_week(tmp_path, monkeypatch) -> None:
+    class FixedTimestamp(pd.Timestamp):
+        @classmethod
+        def today(cls, tz=None):
+            return cls("2026-05-20")
+
+    monkeypatch.setattr(pd, "Timestamp", FixedTimestamp)
+    csv_path = tmp_path / "TEST.csv"
+    csv_path.write_text(
+        "\n".join(
+            [
+                "Date,Open,High,Low,Close,Volume",
+                "2026-05-11,1,2,1,2,100",
+                "2026-05-18,2,3,2,3,200",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    dropped = _read_local_csv(csv_path)
+    kept = _read_local_csv(csv_path, include_current_week=True)
+
+    assert dropped.index.strftime("%Y-%m-%d").tolist() == ["2026-05-11"]
+    assert kept.index.strftime("%Y-%m-%d").tolist() == ["2026-05-11", "2026-05-18"]
+
+
+def test_yahoo_query_ticker_uses_yahoo_dash_for_dot_tickers() -> None:
+    assert _yahoo_query_ticker("brk.b") == "BRK-B"
+    assert _yahoo_query_ticker("BF.B") == "BF-B"
+    assert _yahoo_query_ticker("AAPL") == "AAPL"
+
+
+def test_download_weekly_from_yahoo_does_not_fall_back_to_raw_weekly(monkeypatch) -> None:
+    raw_chart_calls = []
+
+    def fake_daily_download(ticker: str, include_current_week: bool = False) -> pd.DataFrame:
+        raise RuntimeError("daily unavailable")
+
+    def fake_raw_chart(*args, **kwargs) -> pd.DataFrame:
+        raw_chart_calls.append((args, kwargs))
+        raise RuntimeError("raw 1wk fallback should not be used")
+
+    def fake_yfinance_download(ticker: str, include_current_week: bool = False) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "Open": [1.0],
+                "High": [2.0],
+                "Low": [1.0],
+                "Close": [2.0],
+                "Volume": [100],
+            },
+            index=pd.to_datetime(["2026-05-11"]),
+        )
+
+    monkeypatch.setattr(
+        data_provider,
+        "_download_daily_then_resample_from_yahoo",
+        fake_daily_download,
+    )
+    monkeypatch.setattr(data_provider, "_download_from_yahoo_chart", fake_raw_chart)
+    monkeypatch.setattr(data_provider, "_download_with_yfinance", fake_yfinance_download)
+
+    result = _download_weekly_from_yahoo("BRK.B")
+
+    assert result.index.strftime("%Y-%m-%d").tolist() == ["2026-05-11"]
+    assert raw_chart_calls == []
