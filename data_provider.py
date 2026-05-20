@@ -35,7 +35,9 @@ def load_weekly_data(ticker: str, data_dir: Path | str = DATA_DIR) -> pd.DataFra
     csv_path = data_dir / f"{ticker}.csv"
     if csv_path.exists():
         try:
-            return _read_local_csv(csv_path)
+            cached = _read_local_csv(csv_path)
+            if _is_monday_labeled_weekly(cached):
+                return cached
         except Exception:
             pass
 
@@ -56,9 +58,14 @@ def _download_weekly_from_yahoo(ticker: str) -> pd.DataFrame:
     errors = []
 
     try:
-        return _download_from_yahoo_chart(ticker)
+        return _download_daily_then_resample_from_yahoo(ticker)
     except Exception as exc:  # pragma: no cover - depends on network.
-        errors.append(f"Yahoo chart API: {exc}")
+        errors.append(f"Yahoo daily chart API: {exc}")
+
+    try:
+        return _download_from_yahoo_chart(ticker, interval="1wk")
+    except Exception as exc:  # pragma: no cover - depends on network.
+        errors.append(f"Yahoo weekly chart API: {exc}")
 
     try:
         return _download_with_yfinance(ticker)
@@ -81,7 +88,7 @@ def _download_with_yfinance(ticker: str) -> pd.DataFrame:
     raw = yf.download(
         ticker,
         period="max",
-        interval="1wk",
+        interval="1d",
         auto_adjust=False,
         progress=False,
         threads=False,
@@ -91,14 +98,19 @@ def _download_with_yfinance(ticker: str) -> pd.DataFrame:
     data = _normalize_ohlcv_dataframe(raw.reset_index())
     if data.empty:
         raise DataLoadError("yfinance에서 빈 데이터가 반환되었습니다.")
-    return _drop_incomplete_current_week(data)
+    return _resample_daily_to_weekly(data)
 
 
-def _download_from_yahoo_chart(ticker: str) -> pd.DataFrame:
+def _download_daily_then_resample_from_yahoo(ticker: str) -> pd.DataFrame:
+    daily = _download_from_yahoo_chart(ticker, interval="1d")
+    return _resample_daily_to_weekly(daily)
+
+
+def _download_from_yahoo_chart(ticker: str, interval: str) -> pd.DataFrame:
     period2 = int(time.time())
     query = (
         f"?period1=0&period2={period2}"
-        "&interval=1wk&events=history&includeAdjustedClose=true"
+        f"&interval={interval}&events=history&includeAdjustedClose=true"
     )
     url = YAHOO_CHART_URL.format(ticker=quote(ticker, safe="")) + query
     request = Request(
@@ -202,6 +214,41 @@ def _drop_incomplete_current_week(data: pd.DataFrame) -> pd.DataFrame:
         return data
 
     today = pd.Timestamp.today().normalize()
-    current_week = today.to_period("W-FRI")
-    row_weeks = data.index.to_period("W-FRI")
-    return data[row_weeks < current_week]
+    current_week_start = _monday_week_start(pd.DatetimeIndex([today]))[0]
+    row_week_starts = _monday_week_start(data.index)
+    return data[row_week_starts < current_week_start]
+
+
+def _resample_daily_to_weekly(daily: pd.DataFrame) -> pd.DataFrame:
+    if daily.empty:
+        return daily
+
+    data = daily.sort_index().copy()
+    data["_WeekStart"] = _monday_week_start(data.index)
+
+    aggregations = {
+        "Open": "first",
+        "High": "max",
+        "Low": "min",
+        "Close": "last",
+        "Volume": "sum",
+    }
+    if "Adj Close" in data.columns:
+        aggregations["Adj Close"] = "last"
+
+    weekly = data.groupby("_WeekStart").agg(aggregations)
+    weekly.index = pd.to_datetime(weekly.index)
+    weekly.index.name = "Date"
+    weekly = weekly.dropna(subset=REQUIRED_COLUMNS)
+    return _drop_incomplete_current_week(weekly)
+
+
+def _monday_week_start(index: pd.DatetimeIndex) -> pd.DatetimeIndex:
+    normalized = pd.DatetimeIndex(index).normalize()
+    return normalized - pd.to_timedelta(normalized.weekday, unit="D")
+
+
+def _is_monday_labeled_weekly(data: pd.DataFrame) -> bool:
+    if data.empty:
+        return False
+    return bool((pd.DatetimeIndex(data.index).weekday == 0).all())

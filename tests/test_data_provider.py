@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import pandas as pd
 
-from data_provider import _chart_payload_to_dataframe, _drop_incomplete_current_week
+from data_provider import (
+    _chart_payload_to_dataframe,
+    _drop_incomplete_current_week,
+    _resample_daily_to_weekly,
+)
 
 
 def test_chart_payload_to_dataframe_normalizes_yahoo_weekly_rows() -> None:
@@ -52,3 +56,29 @@ def test_drop_incomplete_current_week_removes_all_rows_in_current_week(monkeypat
     result = _drop_incomplete_current_week(data)
 
     assert result.index.strftime("%Y-%m-%d").tolist() == ["2026-05-08", "2026-05-15"]
+
+
+def test_resample_daily_to_weekly_uses_monday_label_and_weekly_ohlcv() -> None:
+    daily = pd.DataFrame(
+        {
+            "Open": [84.26, 85.00, 86.00, 87.00, 86.50],
+            "High": [85.00, 87.83, 87.00, 87.20, 87.00],
+            "Low": [84.08, 84.70, 85.80, 86.40, 86.20],
+            "Close": [84.90, 86.20, 86.80, 86.50, 87.37],
+            "Volume": [10, 20, 30, 40, 50],
+            "Adj Close": [84.90, 86.20, 86.80, 86.50, 87.37],
+        },
+        index=pd.to_datetime(
+            ["2025-08-18", "2025-08-19", "2025-08-20", "2025-08-21", "2025-08-22"]
+        ),
+    )
+
+    result = _resample_daily_to_weekly(daily)
+
+    assert result.index.strftime("%Y-%m-%d").tolist() == ["2025-08-18"]
+    row = result.iloc[0]
+    assert row["Open"] == 84.26
+    assert row["High"] == 87.83
+    assert row["Low"] == 84.08
+    assert row["Close"] == 87.37
+    assert row["Volume"] == 150
