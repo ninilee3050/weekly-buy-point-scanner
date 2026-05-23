@@ -67,6 +67,40 @@ def test_buy_point_is_recorded_after_lower_area_bullish_start_and_three_conditio
     assert bool(full.loc[data.index[3], "buy_point"]) is False
 
 
+def test_observation_continues_after_macd_enters_upper_area() -> None:
+    data = make_indicator_frame(
+        [
+            {"MACD": -2.0, "Signal": -1.0, "Momentum": -3.0, "RSI": 40.0, "MFI": 40.0},
+            {"MACD": -0.8, "Signal": -1.2, "Momentum": -1.0, "RSI": 48.0, "MFI": 49.0},
+            {"MACD": 0.2, "Signal": -0.4, "Momentum": -0.5, "RSI": 49.0, "MFI": 49.5},
+            {"MACD": 0.6, "Signal": -0.1, "Momentum": 1.0, "RSI": 55.0, "MFI": 56.0},
+        ]
+    )
+
+    buy_points, full = scan_buy_points(data)
+
+    assert bool(full.loc[data.index[1], "lower_area_bullish_start"]) is True
+    assert bool(full.loc[data.index[2], "observation_active"]) is True
+    assert len(buy_points) == 1
+    assert buy_points.index[0] == data.index[3]
+
+
+def test_buy_point_allows_bullish_start_crossing_zero_from_lower_area() -> None:
+    data = make_indicator_frame(
+        [
+            {"MACD": -2.0, "Signal": -1.0, "Momentum": -3.0, "RSI": 40.0, "MFI": 40.0},
+            {"MACD": 0.1, "Signal": -0.2, "Momentum": 1.0, "RSI": 55.0, "MFI": 56.0},
+        ]
+    )
+
+    buy_points, full = scan_buy_points(data)
+
+    assert bool(full.loc[data.index[1], "macd_bullish_start"]) is True
+    assert bool(full.loc[data.index[1], "lower_area_bullish_start"]) is True
+    assert len(buy_points) == 1
+    assert buy_points.index[0] == data.index[1]
+
+
 def test_observation_resets_when_bearish_start_appears_before_conditions() -> None:
     data = make_indicator_frame(
         [

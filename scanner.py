@@ -25,6 +25,9 @@ def add_signal_columns(data: pd.DataFrame) -> pd.DataFrame:
     result["macd_bullish_start"] = (
         (prev_signal > prev_macd) & (result["MACD"] > result["Signal"])
     ).fillna(False)
+    result["lower_area_bullish_start"] = (
+        result["macd_bullish_start"] & ((result["MACD"] < 0) | (prev_macd < 0))
+    ).fillna(False)
     result["macd_bearish_start"] = (
         (prev_macd > prev_signal) & (result["Signal"] > result["MACD"])
     ).fillna(False)
@@ -53,8 +56,7 @@ def scan_buy_points(data: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
 
         if (
             not observing
-            and bool(row["macd_bullish_start"])
-            and row["MACD"] < 0
+            and bool(row["lower_area_bullish_start"])
         ):
             observing = True
             observation_start_date = date
